@@ -14,24 +14,6 @@
   window.addEventListener('pagehide', () => window.scrollTo(0, 0), {passive:true});
   const fine = window.matchMedia('(pointer:fine)').matches;
 
-  // ---------- Premium loading (original RoboSahayak loader) ----------
-  const loader = document.createElement('div');
-  loader.className = 'loader';
-  loader.innerHTML = `<div class="loader-inner"><div class="loader-reactor"><i></i><b></b></div><img class="loader-mark" src="assets/RoboSahayak_final_logo.jpeg" alt="RoboSahayak"><div class="loader-name">ROBO<br>SAHAYAK</div><div class="loader-status"><span class="sound-dot"></span>TECHNO FUSION • SYSTEM INITIALIZING</div><div class="loader-bar"><i></i></div><div class="loader-percent">0%</div></div>`;
-  document.body.prepend(loader);
-  const percent = loader.querySelector('.loader-percent');
-  const start = performance.now();
-  const duration = reduce ? 260 : 1200;
-  const loaderTick = now => {
-    const p = Math.min(100, Math.round(((now - start) / duration) * 100));
-    if (percent) percent.textContent = p + '%';
-    if (p < 100) requestAnimationFrame(loaderTick);
-  };
-  requestAnimationFrame(loaderTick);
-  const hideLoader = () => loader.classList.add('hide');
-  window.addEventListener('load', () => setTimeout(hideLoader, reduce ? 60 : 700), {once:true});
-  setTimeout(hideLoader, reduce ? 400 : 1700);
-
   // ---------- Neon atmosphere ----------
   const atmosphere = document.createElement('div');
   atmosphere.className = 'neon-atmosphere';
@@ -48,13 +30,15 @@
   let particles = [], w = 0, h = 0, dpr = 1;
   const colors = {electron:'#43f5ff', proton:'#ff49d8', gold:'#ffd76a'};
   function resizeParticles(){
-    dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+    dpr = Math.min(window.devicePixelRatio || 1, 1.15);
     w = window.innerWidth; h = window.innerHeight;
     canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
     canvas.style.width = w+'px'; canvas.style.height = h+'px';
     ctx.setTransform(dpr,0,0,dpr,0,0);
     if(reduce){particles=[];return;}
-    const count = w < 500 ? 8 : w < 900 ? 12 : Math.min(22, Math.max(12, Math.floor(w*h/85000)));
+    const cores = navigator.hardwareConcurrency || 4;
+    const lowPower = cores <= 4 || w < 700;
+    const count = w < 500 ? 4 : w < 900 ? 6 : lowPower ? 8 : Math.min(12, Math.max(8, Math.floor(w*h/150000)));
     particles = Array.from({length:count},(_,i)=>({
       type:i%4===0?'proton':'electron', x:Math.random()*w, y:Math.random()*h,
       vx:(Math.random()-.5)*.13, vy:(Math.random()-.5)*.13,
@@ -62,8 +46,17 @@
       phase:Math.random()*Math.PI*2, speed:.006+Math.random()*.008, orbit:18+Math.random()*58
     }));
   }
-  function drawParticles(){
-    if(reduce) return;
+  let lastParticlePaint = 0;
+  function drawParticles(now){
+    if(reduce || document.hidden){
+      requestAnimationFrame(drawParticles);
+      return;
+    }
+    if (now - lastParticlePaint < 42) {
+      requestAnimationFrame(drawParticles);
+      return;
+    }
+    lastParticlePaint = now;
     ctx.clearRect(0,0,w,h);
     for(const p of particles){
       p.phase += p.speed;
@@ -96,15 +89,6 @@
     document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
   }else document.querySelectorAll('.reveal').forEach(el=>el.classList.add('show'));
 
-  // ---------- Desktop cursor ----------
-  if(fine&&!reduce){
-    const cursor=document.querySelector('.cursor');
-    if(cursor){let x=innerWidth/2,y=innerHeight/2,tx=x,ty=y;
-      addEventListener('pointermove',e=>{tx=e.clientX;ty=e.clientY;document.body.style.setProperty('--mx',tx+'px');document.body.style.setProperty('--my',ty+'px');},{passive:true});
-      const tick=()=>{x+=(tx-x)*.18;y+=(ty-y)*.18;cursor.style.left=x+'px';cursor.style.top=y+'px';requestAnimationFrame(tick);};tick();
-    }
-  }
-
   // ---------- Scroll beam ----------
   const progress=document.createElement('div');progress.className='scroll-beam';progress.setAttribute('aria-hidden','true');document.body.appendChild(progress);
   let scrollQueued=false;
@@ -112,20 +96,30 @@
   addEventListener('scroll',()=>{if(!scrollQueued){scrollQueued=true;requestAnimationFrame(updateProgress);}},{passive:true});updateProgress();
 
   // ---------- Background music ----------
-  // Music is created early and its playback position is preserved across page loads,
-  // so the track can continue underneath the loading screen instead of restarting.
+  // Audible autoplay is browser-controlled. We attempt autoplay, then retry from
+  // the first real user gesture. The music button always provides an explicit
+  // play/stop control as well.
   const music = document.createElement('audio');
   music.className = 'robo-music';
   music.loop = true;
+  music.autoplay = true;
+  music.muted = false;
   music.preload = 'auto';
+  music.setAttribute('playsinline', '');
   music.setAttribute('aria-hidden', 'true');
-  music.src = 'assets/RoboSahayak_background_music.mp3';
+  music.src = new URL('assets/RoboSahayak_background_music.mp3', document.baseURI).href;
   document.body.appendChild(music);
 
-  let musicOn = localStorage.getItem('roboMusic') === 'on';
-  const savedMusicTime = Number(localStorage.getItem('roboMusicTime') || 0);
+  let musicOn = true;
+  let savedMusicTime = 0;
   let musicBaseVolume = 0.72;
   let videoDucked = false;
+  try {
+    // New/returning visitors start with music enabled. Only an explicit OFF
+    // choice disables it until the user turns it back on.
+    musicOn = localStorage.getItem('roboMusic') !== 'off';
+    savedMusicTime = Number(localStorage.getItem('roboMusicTime') || 0);
+  } catch (_) {}
   music.volume = musicBaseVolume;
 
   const musicBtn = document.createElement('button');
@@ -152,53 +146,63 @@
     if (music.readyState >= 1) apply();
     else music.addEventListener('loadedmetadata', apply, {once:true});
   };
-  restoreMusicPosition();
 
   const startMusic = async () => {
-    if (!musicOn) return;
+    if (!musicOn) return false;
     try {
       restoreMusicPosition();
       const activeVideo = Array.from(document.querySelectorAll('video')).some(v => !v.paused && !v.ended);
       music.volume = activeVideo ? 0.14 : musicBaseVolume;
       videoDucked = activeVideo;
-      await music.play();
-    } catch (_) {
-      // Autoplay can still be blocked until the visitor interacts with the page.
+      if (music.readyState === 0) music.load();
+      music.autoplay = true;
+      const result = music.play();
+      if (result && typeof result.then === 'function') await result;
+      updateMusicButton();
+      return !music.paused;
+    } catch (error) {
+      // Browsers can block audible autoplay until the visitor interacts.
+      // The listeners below retry immediately after the first permitted gesture.
+      return false;
     }
   };
+  window.roboStartMusic = startMusic;
 
-  musicBtn.addEventListener('click', async () => {
+  music.addEventListener('error', () => {
+    musicBtn.title = 'Music file could not be loaded';
+  });
+
+  musicBtn.addEventListener('click', async (event) => {
+    event.stopPropagation();
     musicOn = !musicOn;
-    localStorage.setItem('roboMusic', musicOn ? 'on' : 'off');
+    try { localStorage.setItem('roboMusic', musicOn ? 'on' : 'off'); } catch (_) {}
     updateMusicButton();
     if (musicOn) {
       await startMusic();
     } else {
       music.pause();
       music.currentTime = 0;
-      localStorage.removeItem('roboMusicTime');
+      try { localStorage.removeItem('roboMusicTime'); } catch (_) {}
     }
   });
 
-  // Attempt immediately so enabled music can run during the loading screen.
-  if (musicOn) {
+  // Retry after any genuine interaction. This is the reliable fallback for
+  // browsers that block audible autoplay until the user interacts with the site.
+  const unlockMusic = (event) => {
+    if (!musicOn || !music.paused || event?.target?.closest?.('.music-toggle')) return;
     startMusic();
-    const resumeMusic = () => {
-      startMusic();
-      document.removeEventListener('pointerdown', resumeMusic);
-      document.removeEventListener('keydown', resumeMusic);
-    };
-    document.addEventListener('pointerdown', resumeMusic, {once:true, passive:true});
-    document.addEventListener('keydown', resumeMusic, {once:true});
-  }
+  };
+  document.addEventListener('pointerdown', unlockMusic, {capture:true, passive:true});
+  document.addEventListener('keydown', unlockMusic, {capture:true});
+  document.addEventListener('touchstart', unlockMusic, {capture:true, passive:true});
+  if (musicOn) startMusic();
 
-  // Preserve the exact playback position when navigating to another page.
   const saveMusicPosition = () => {
     if (musicOn && !music.paused && Number.isFinite(music.currentTime)) {
-      localStorage.setItem('roboMusicTime', String(music.currentTime));
+      savedMusicTime = music.currentTime;
+      try { localStorage.setItem('roboMusicTime', String(music.currentTime)); } catch (_) {}
     }
   };
-  setInterval(saveMusicPosition, 900);
   addEventListener('pagehide', saveMusicPosition, {passive:true});
   addEventListener('beforeunload', saveMusicPosition, {passive:true});
 
@@ -235,7 +239,7 @@
   let autoScroll = false;
   let autoFrame = 0;
   let lastAutoTime = 0;
-  const AUTO_SPEED = 420; // pixels per second — TV end-credit style, frame-rate independent
+  const AUTO_SPEED = 240; // pixels per second — calm, cinematic and frame-rate independent
   const updateAutoButton = () => {
     autoBtn.textContent = autoScroll ? '↕ AUTO SCROLL • ON' : '↕ AUTO SCROLL';
     autoBtn.classList.toggle('on', autoScroll);
@@ -249,13 +253,15 @@
     if (!autoScroll) return;
     autoScroll = false;
     cancelAnimationFrame(autoFrame);
+    document.documentElement.style.scrollBehavior = autoScrollPreviousBehavior;
     lastAutoTime = 0;
     updateAutoButton();
   };
+  let autoScrollPreviousBehavior = '';
   const autoStep = now => {
     if (!autoScroll) return;
     if (!lastAutoTime) lastAutoTime = now;
-    const dt = Math.min(16.667, now - lastAutoTime);
+    const dt = Math.min(32, now - lastAutoTime);
     lastAutoTime = now;
     const max = document.documentElement.scrollHeight - window.innerHeight;
     const next = Math.min(max, window.scrollY + AUTO_SPEED * dt / 1000);
@@ -267,6 +273,8 @@
     if (autoScroll) { stopAutoScroll(); return; }
     const max = document.documentElement.scrollHeight - window.innerHeight;
     if (max <= 2) return;
+    autoScrollPreviousBehavior = document.documentElement.style.scrollBehavior || '';
+    document.documentElement.style.scrollBehavior = 'auto';
     autoScroll = true;
     lastAutoTime = 0;
     updateAutoButton();
@@ -367,31 +375,37 @@
 })();
 
 
-// Team Contribution typing animation — text is rendered character-by-character when the Team page opens.
+// Team Contribution typing animation — ultra-fast, frame-efficient rendering.
 (function(){
   const typingItems = document.querySelectorAll('.typing-text[data-typing]');
   if (!typingItems.length) return;
-  const typeOne = (el, text, speed, done) => {
+  const typeOne = (el, text, done) => {
     let i = 0;
     el.textContent = '';
     el.classList.add('typing-active');
     const tick = () => {
+      // Render several characters per frame: extremely fast without creating
+      // hundreds of independent timer callbacks.
+      const chunk = 7;
+      i = Math.min(text.length, i + chunk);
+      el.textContent = text.slice(0, i);
       if (i < text.length) {
-        el.textContent += text.charAt(i++);
-        window.setTimeout(tick, speed);
+        requestAnimationFrame(tick);
       } else {
         el.classList.remove('typing-active');
         if (done) done();
       }
     };
-    tick();
+    requestAnimationFrame(tick);
   };
   const startTyping = () => {
     let index = 0;
     const next = () => {
       if (index >= typingItems.length) return;
       const el = typingItems[index++];
-      typeOne(el, el.dataset.typing || '', 10, () => window.setTimeout(next, 180));
+      typeOne(el, el.dataset.typing || '', () => {
+        window.setTimeout(next, 10);
+      });
     };
     next();
   };
